@@ -29,9 +29,9 @@ public class OlbSimulation {
     public static void main(String[] args) {
         CloudSim simulation = new CloudSim();
 
-        // 1. Inisialisasi Datacenter & 4 Host (Total 24.000 MIPS)
+        // 1. Inisialisasi Datacenter & 4 Host (Total 24.000 MIPS) dengan Kebijakan Grade-Based
         List<Host> hostList = createHosts();
-        Datacenter datacenter = new DatacenterSimple(simulation, hostList);
+        Datacenter datacenter = new DatacenterSimple(simulation, hostList, new GradedVmAllocationPolicy());
 
         // 2. Broker Penjadwal
         DatacenterBroker broker = new DatacenterBrokerSimple(simulation);
@@ -40,7 +40,7 @@ public class OlbSimulation {
         List<Vm> vmList = createVms();
         broker.submitVmList(vmList);
 
-        // 4. Inisialisasi Cloudlet dari Dataset GoCJ (Default: 100 Task)
+        // 4. Inisialisasi Cloudlet dari Dataset GoCJ via Random Sampling
         int jumlahTask = 100;
         List<Cloudlet> cloudletList = createCloudlets(jumlahTask);
 
@@ -51,7 +51,9 @@ public class OlbSimulation {
         // 6. Jalankan Simulasi
         simulation.start();
 
-        // 7. Tampilkan Hasil Eksekusi dan Metrik
+        // 7. Tampilkan Pemetaan Alokasi VM ke Host, Tabel Eksekusi, dan Metrik
+        printVmHostAssignment(vmList);
+
         List<Cloudlet> finishedCloudlets = broker.getCloudletFinishedList();
         new CloudletsTableBuilder(finishedCloudlets).build();
         calculateProjectMetrics(vmList, finishedCloudlets);
@@ -121,27 +123,35 @@ public class OlbSimulation {
     private static List<Cloudlet> createCloudlets(int count) {
         List<Cloudlet> list = new ArrayList<>();
         String datasetPath = "src/main/resources/dataset/GoCJ_Dataset_1000.csv";
-        Random rand = new Random(42);
+        List<Long> allLengths = new ArrayList<>();
 
         try (BufferedReader br = new BufferedReader(new FileReader(datasetPath))) {
             String line;
-            while ((line = br.readLine()) != null && list.size() < count) {
+            while ((line = br.readLine()) != null) {
                 line = line.trim();
                 if (line.isEmpty()) {
                     continue;
                 }
 
                 String[] parts = line.split(",");
-                long length = Long.parseLong(parts[0]);
-
-                Cloudlet c = new CloudletSimple(length, 1);
-                c.setFileSize(300 + rand.nextInt(9700));
-                c.setOutputSize(300 + rand.nextInt(9700));
-                c.setUtilizationModelCpu(new UtilizationModelFull());
-                list.add(c);
+                allLengths.add(Long.parseLong(parts[0]));
             }
         } catch (IOException e) {
             System.err.println("Gagal membaca file dataset: " + e.getMessage());
+        }
+
+        // Random sampling: Acak dataset GoCJ lalu ambil sampel sejumlah 'count' task
+        Collections.shuffle(allLengths, new Random());
+        Random rand = new Random();
+
+        int selectedCount = Math.min(count, allLengths.size());
+        for (int i = 0; i < selectedCount; i++) {
+            long length = allLengths.get(i);
+            Cloudlet c = new CloudletSimple(length, 1);
+            c.setFileSize(300 + rand.nextInt(9700));
+            c.setOutputSize(300 + rand.nextInt(9700));
+            c.setUtilizationModelCpu(new UtilizationModelFull());
+            list.add(c);
         }
 
         return list;
@@ -168,6 +178,25 @@ public class OlbSimulation {
             // Update readyTime VM terpilih
             readyTime.put(bestVm, readyTime.get(bestVm) + duration);
         }
+    }
+
+    private static void printVmHostAssignment(List<Vm> vmList) {
+        System.out.println("\n------------ Pemetaan VM ke Host (Grade-Based) ------------");
+        System.out.printf("%-6s %-8s %-10s %-6s %-20s %-16s%n",
+                "VM ID", "Grade", "MIPS/Core", "vCPU", "Host yang Diassign", "Grade Host");
+        System.out.println("-----------------------------------------------------------");
+        for (Vm vm : vmList) {
+            Host host = vm.getHost();
+            String hostGrade = (host.getMips() >= 1500) ? "High Performance" : "Standard";
+            System.out.printf("%-6d %-8s %-10.0f %-6d Host %-15d %-16s%n",
+                    (long) vm.getId(),
+                    vm.getDescription(),
+                    vm.getMips(),
+                    (long) vm.getNumberOfPes(),
+                    (long) host.getId(),
+                    hostGrade);
+        }
+        System.out.println("-----------------------------------------------------------\n");
     }
 
     private static void calculateProjectMetrics(List<Vm> vmList, List<Cloudlet> finishedCloudlets) {
