@@ -1,456 +1,319 @@
-# PENCERDASAN CLOUDSIM PLUS & ALGORITMA PENJADWALAN OLB
-> **Dokumen Panduan Teknis, Logical Thinking, Bedah Kode, dan Eksekusi Demo**  
-> **Workspace:** `C:\cloudsim-workspace`  
-> **Pustaka:** CloudSim Plus Versi 7.3.0 | **Runtime:** Java JDK 24 (Target Bytecode 21)
+# PENCERDASAN TEKNIS CLOUDSIM PLUS & ALGORITMA PENJADWALAN OLB
+
+Dokumen ini merupakan acuan teknis utama (*single source of truth*) untuk implementasi simulasi cloud computing menggunakan CloudSim Plus 7.3.0 dengan algoritma penjadwalan Opportunistic Load Balancing (OLB), kebijakan alokasi terarah `GradedVmAllocationPolicy`, dan dataset Google Cloud Jobs (GoCJ).
 
 ---
 
-## DAFTAR ISI
-1. [Koreksi Sintaks & Dependensi (PENTING)](#1-koreksi-sintaks--dependensi-penting)
-2. [Konsep Arsitektur 5 Komponen CloudSim Plus](#2-konsep-arsitektur-5-komponen-cloudsim-plus)
-3. [Logical Thinking Algoritma OLB & 4 Metrik Evaluasi](#3-logical-thinking-algoritma-olb--4-metrik-evaluasi)
-4. [Bedah Kode OlbSimulation.java Baris per Baris](#4-bedah-kode-olbsimulationjava-baris-per-baris)
-5. [Kode Lengkap OlbSimulation.java (Siap Pakai)](#5-kode-lengkap-olbsimulationjava-siap-pakai)
-6. [Panduan Terminal Maven & Variasi Jumlah Task](#6-panduan-terminal-maven--variasi-jumlah-task)
-7. [Panduan Eksekusi 6 Permintaan Dosen saat Demo](#7-panduan-eksekusi-6-permintaan-dosen-saat-demo)
+## 1. GAMBARAN UMUM SISTEM
+
+### 1.1 Tujuan Proyek
+Simulasi ini bertujuan untuk mengevaluasi kinerja algoritma penjadwalan tugas Opportunistic Load Balancing (OLB) pada lingkungan komputasi awan yang heterogen (kapasitas server fisik dan mesin virtual bervariasi). Evaluasi dilakukan dengan mengukur empat metrik utama:
+1. **Makespan** (waktu penyelesaian seluruh rangkaian tugas)
+2. **Total Cost** (biaya sewa VM finansial)
+3. **Resource Utilization** (efisiensi pemanfaatan kapasitas mesin)
+4. **Degree of Imbalance** (derajat ketimpangan pembagian beban kerja antar VM)
+
+### 1.2 Teknologi & Pustaka
+- **Bahasa Pemrograman**: Java (JDK 21 / 24)
+- **Build & Dependency Management**: Apache Maven
+- **Simulation Framework**: CloudSim Plus 7.3.0
+- **Namespace Library**: `org.cloudbus.cloudsim.*` (bukan `org.cloudsimplus.*`)
+- **Titik Masuk Utama**: `src/main/java/OlbSimulation.java`
+- **Kebijakan Alokasi VM**: `src/main/java/GradedVmAllocationPolicy.java`
+
+### 1.3 Arsitektur Dasar CloudSim Plus
+CloudSim Plus bekerja berbasis *Discrete-Event Simulation*. Terdapat 5 entitas utama yang saling berinteraksi secara hierarkis:
+
+1. **CloudSim**: Mesin simulasi inti yang mengelola jam internal (*simulation clock*) dan antrean event. Waktu simulasi bergerak maju berdasarkan eksekusi event, bukan detik riil jam dinding.
+2. **Datacenter**: Penyedia infrastruktur fisik (*cloud provider*) yang menaungi server-server fisik (`Host`).
+3. **Host**: Server fisik mandiri yang memiliki spesifikasi komputasi: Processing Elements (`Pe` / core CPU), RAM, Bandwidth, dan Storage.
+4. **Virtual Machine (VM)**: Mesin virtual yang dialokasikan di dalam Host fisik. VM merupakan unit eksekusi langsung bagi Cloudlet.
+5. **DatacenterBroker**: Pialang yang bertindak atas nama pengguna (*cloud customer*). Broker mengelola daftar VM, mendaftarkan tugas (`Cloudlet`), dan menjalankan algoritma penjadwalan (pemetaan Cloudlet ke VM).
+6. **Cloudlet**: Beban kerja komputasi (tugas/task) yang memiliki ukuran panjang instruksi tertentu dalam satuan MI (*Million Instructions*).
 
 ---
 
-## 1. KOREKSI SINTAKS & DEPENDENSI (PENTING)
+## 2. STRUKTUR PROYEK & PANDUAN MAVEN
 
-Pada modul panduan draf awal Anda, terdapat kesalahan deklarasi nama package (`import`). Hampir semua komponen ditulis dengan awalan `org.cloudsimplus.*`. 
-
-### Fakta Teknis Library CloudSim Plus v7.3.0
-CloudSim Plus adalah pengembangan dari CloudSim standar. Agar kompatibel dengan ekosistem Java, para pengembangnya mempertahankan namespace paket inti pada **`org.cloudbus.cloudsim.*`**, bukan `org.cloudsimplus.*`. Jika menggunakan import draf awal, kompilasi Java akan menghasilkan error `package does not exist`.
-
-Berikut tabel pemetaan perbaikan yang wajib digunakan:
-
-| Komponen | Import di Draf Awal (SALAH ❌) | Import Resmi di JAR 7.3.0 (BENAR ✅) |
-| :--- | :--- | :--- |
-| **Mesin Simulasi** | `org.cloudsimplus.core.CloudSimPlus` | `org.cloudbus.cloudsim.core.CloudSim` *(class: `CloudSim`)* |
-| **Broker Penjadwal** | `org.cloudsimplus.brokers.DatacenterBrokerSimple` | `org.cloudbus.cloudsim.brokers.DatacenterBrokerSimple` |
-| **Interface Broker** | `org.cloudbus.cloudsim.brokers.DatacenterBroker` | `org.cloudbus.cloudsim.brokers.DatacenterBroker` |
-| **Datacenter** | `org.cloudsimplus.datacenters.Datacenter` | `org.cloudbus.cloudsim.datacenters.Datacenter` |
-| **Datacenter Simple** | `org.cloudsimplus.datacenters.DatacenterSimple` | `org.cloudbus.cloudsim.datacenters.DatacenterSimple` |
-| **Host Fisik** | `org.cloudsimplus.hosts.Host` | `org.cloudbus.cloudsim.hosts.Host` |
-| **Host Simple** | `org.cloudsimplus.hosts.HostSimple` | `org.cloudbus.cloudsim.hosts.HostSimple` |
-| **Core CPU (Pe)** | `org.cloudsimplus.resources.Pe` | `org.cloudbus.cloudsim.resources.Pe` |
-| **Pe Simple** | `org.cloudsimplus.resources.PeSimple` | `org.cloudbus.cloudsim.resources.PeSimple` |
-| **Virtual Machine** | `org.cloudsimplus.vms.Vm` | `org.cloudbus.cloudsim.vms.Vm` |
-| **Vm Simple** | `org.cloudsimplus.vms.VmSimple` | `org.cloudbus.cloudsim.vms.VmSimple` |
-| **Task (Cloudlet)** | `org.cloudsimplus.cloudlets.Cloudlet` | `org.cloudbus.cloudsim.cloudlets.Cloudlet` |
-| **Cloudlet Simple** | `org.cloudsimplus.cloudlets.CloudletSimple` | `org.cloudbus.cloudsim.cloudlets.CloudletSimple` |
-| **Model Utilitas** | `org.cloudsimplus.utilizationmodels.UtilizationModelFull` | `org.cloudbus.cloudsim.utilizationmodels.UtilizationModelFull` |
-| **Tabel Hasil** | `org.cloudsimplus.builders.tables.CloudletsTableBuilder` | `org.cloudsimplus.builders.tables.CloudletsTableBuilder` ✅ *(paket ini benar)* |
-
----
-
-## 2. KONSEP ARSITEKTUR 5 KOMPONEN CLOUDSIM PLUS
-
-Simulasi komputasi awan di CloudSim Plus berjalan secara diskrit (*Discrete-Event Simulation*) berbasis objek-objek berikut:
-
+### 2.1 Struktur Direktori Proyek
 ```text
-[ CloudSim (Simulation Engine) ]
-               │
-               ▼
-[ Datacenter ] ── menampung ──> [ Host (Server Fisik) ] ── terdiri dari ──> [ Pe (Core CPU) ]
-               ▲
-               │ alokasi resource
-               ▼
-[ DatacenterBroker ] ── menempatkan ──> [ Virtual Machine (VM) ]
-         │
-         │ memetakan (Algoritma Penjadwalan OLB)
-         ▼
-    [ Cloudlet ] (Beban Kerja / Task Komputasi)
+cloudsim-workspace/
+├── .gitignore
+├── pom.xml
+├── PENCERDASAN.MD
+└── src/
+    └── main/
+        ├── java/
+        │   ├── GradedVmAllocationPolicy.java
+        │   └── OlbSimulation.java
+        └── resources/
+            └── dataset/
+                └── GoCJ_Dataset_1000.csv
 ```
 
-### 1. `CloudSim` (Simulation Engine)
-- **Fungsi:** Mengelola jam internal (*internal simulation clock*) dan antrean event.
-- Simulasi komputasi awan tidak berjalan secara *real-time* detik demi detik jam dinding, melainkan melompati waktu dari satu event ke event berikutnya (misal: saat task selesai atau paket data tiba).
+### 2.2 Penjelasan Komponen File
+- **`pom.xml`**: Berkas konfigurasi Maven yang mendefinisikan dependensi `cloudsim-plus` (versi 7.3.0) dan plugin `exec-maven-plugin` untuk mengeksekusi simulasi melalui terminal.
+- **`GradedVmAllocationPolicy.java`**: Kelas kebijakan penempatan VM ke Host fisik berbasis kesesuaian spesifikasi (*Grade-Aware Placement*).
+- **`OlbSimulation.java`**: Berkas utama simulasi yang menginisialisasi CloudSim, Datacenter, Broker, VM, pembacaan CSV dataset, algoritma OLB, pencetakan pemetaan VM-Host, dan perhitungan metrik.
+- **`GoCJ_Dataset_1000.csv`**: Berkas dataset beban kerja yang berisi 1.000 baris tugas dari trace Google Cloud Jobs.
+- **`target/`**: Direktori hasil kompilasi bytecode Java (`.class` dan `.jar`). Dihasilkan otomatis oleh Maven dan tidak boleh di-commit ke Git.
 
-### 2. `Datacenter` & `Host` (Infrastruktur Fisik)
-- **`Datacenter`**: Representasi fasilitas fisik penyedia layanan cloud. Bertindak sebagai kontainer bagi satu atau banyak server fisik (`Host`).
-- **`Host`**: Server fisik individual. Setiap Host memiliki alokasi memori RAM (MB), Bandwidth jaringan (Mbps), media penyimpanan Storage (MB), dan daftar unit pemrosesan CPU (`List<Pe>`).
-- **`Pe` (Processing Element)**: Representasi satu inti prosesor (*CPU Core*). Kecepatannya diukur dalam satuan **MIPS** (*Million Instructions Per Second*).
-  - *Kapasitas Komputasi Host* = $\sum (\text{Jumlah Pe} \times \text{MIPS tiap Pe})$.
+### 2.3 Panduan Version Control (Git & GitHub)
+Untuk membagikan repositori proyek ini ke rekan tim melalui GitHub:
+1. **File/Folder yang wajib di-push**:
+   - `pom.xml`
+   - `src/` (seluruh berkas kode Java dan dataset CSV di dalamnya)
+   - `.gitignore`
+   - `PENCERDASAN.MD` (atau `README.md`)
+2. **File/Folder yang dilarang di-push**:
+   - Folder `target/`
+   - Folder konfigurasi lokal IDE seperti `.idea/`, `.vscode/`, atau file `*.iml`.
+3. **Konfigurasi standar `.gitignore`**:
+   ```gitignore
+   target/
+   *.class
+   .idea/
+   *.iml
+   .vscode/
+   .settings/
+   .project/
+   .classpath
+   ```
 
-### 3. `Vm` (Virtual Machine)
-- **Fungsi:** Mesin virtual tempat task dieksekusi. VM dialokasikan di atas Host fisik oleh Datacenter.
-- Properti VM meliputi: ID, jumlah vCPU (`numberOfPes`), kecepatan komputasi per vCPU (`mips`), RAM, Bandwidth, dan ukuran disk.
-- Syarat validasi: Total kebutuhan MIPS dan RAM seluruh VM yang aktif pada suatu Host tidak boleh melebihi kapasitas fisik Host tersebut.
-
-### 4. `Cloudlet` (Task / Beban Komputasi)
-- **Fungsi:** Representasi aplikasi atau pekerjaan komputasi yang meminta eksekusi ke CPU.
-- Properti terpenting:
-  - **`length`**: Beban komputasi total dalam satuan **MI** (*Million Instructions*).
-  - **`numberOfPes`**: Jumlah core CPU yang dibutuhkan untuk memproses task tersebut secara paralel.
-  - **`utilizationModel`**: Model konsumsi sumber daya (misal: `UtilizationModelFull` berarti task menggunakan 100% kapasitas vCPU yang dialokasikan hingga selesai).
-
-### 5. `DatacenterBroker` (Pialang / Penjadwal)
-- **Fungsi:** Bertindak atas nama pengguna (*cloud customer*). Broker bertanggung jawab:
-  1. Mendaftarkan daftar VM (`submitVmList`).
-  2. Mendaftarkan daftar Cloudlet (`submitCloudletList`).
-  3. Menentukan Cloudlet mana dieksekusi oleh VM mana. Di sinilah logika algoritma penjadwalan (seperti OLB, FCFS, Round Robin) diterapkan.
-
----
-
-## 3. LOGICAL THINKING ALGORITMA OLB & 4 METRIK EVALUASI
-
-### A. Cara Kerja Algoritma Opportunistic Load Balancing (OLB)
-OLB adalah algoritma penjadwalan heuristik sederhana dengan prinsip dasar: **"Tugaskan task berikutnya ke mesin yang paling cepat menganggur/bebas tanpa memedulikan ukuran task maupun kecepatan mesin."**
-
-#### Logika Matematika:
-1. Broker menyimpan tabel pencatatan waktu selesai mesin:
-   $$\text{readyTime}_j = 0, \quad \forall j \in \text{Daftar VM}$$
-2. Untuk setiap task $i$ yang masuk antrean berurutan:
-   - Evaluasi seluruh VM dan cari indeks VM terpilih ($j^*$):
-     $$j^* = \arg\min_{j} (\text{readyTime}_j)$$
-   - Hitung durasi eksekusi task pada VM terpilih:
-     $$\text{execTime} = \frac{\text{Length Cloudlet}_i}{\text{Total MIPS VM}_{j^*}} = \frac{\text{Length}_i}{\text{numberOfPes}_{j^*} \times \text{mips}_{j^*}}$$
-   - Perbarui status waktu ketersediaan VM terpilih:
-     $$\text{readyTime}_{j^*} = \text{readyTime}_{j^*} + \text{execTime}$$
-   - Pasangkan task $i$ ke VM $j^*$.
-
-#### Karakteristik OLB:
-- **Kelebihan:** Kompleksitas komputasi sangat rendah ($\mathcal{O}(n \cdot m)$ dengan $n$ task dan $m$ VM). Menjaga agar semua VM tetap sibuk bekerja (utilisasi tinggi).
-- **Kekurangan:** Mengabaikan heterogenitas. Task berukuran raksasa bisa saja terlempar ke VM lambat hanya karena VM tersebut saat itu sedang kosong, yang berakibat pada pembengkakan waktu penyelesaian total (*Makespan*) dan biaya sewa (*Total Cost*).
-
----
-
-### B. Perhitungan 4 Metrik Evaluasi Proyek
-
-1. **Makespan (Waktu Penyelesaian Total):**
-   Waktu saat seluruh task pada sistem telah selesai diproses. Nilainya ditentukan oleh waktu eksekusi VM yang paling terakhir selesai bekerja:
-   $$\text{Makespan} = \max_{j} (\text{Total Waktu Eksekusi VM}_j)$$
-   *(Satuan: Detik)*
-
-2. **Total Cost (Akumulasi Biaya Sewa VM):**
-   Biaya total yang harus dibayar berdasarkan durasi aktif tiap VM dikalikan tarif per detik masing-masing tipe VM:
-   $$\text{Total Cost} = \sum_{i \in \text{Finished Cloudlets}} (\text{execTime}_i \times \text{Tarif VM}_i)$$
-   *(Satuan: Dollar AS / $)*
-
-3. **Resource Utilization (Persentase Pemanfaatan Sumber Daya):**
-   Rata-rata persentase waktu sibuk seluruh VM terhadap durasi Makespan:
-   $$\text{Resource Utilization} = \left( \frac{\sum_{j=1}^{m} \text{Total Waktu Eksekusi VM}_j}{m \times \text{Makespan}} \right) \times 100\%$$
-   *(Satuan: Persen / %)*
-
-4. **Degree of Imbalance (DI - Derajat Ketidakseimbangan Beban):**
-   Mengukur ketimpangan pembagian kerja antar mesin. Semakin kecil nilainya (mendekati 0), pembagian beban kerja antar VM semakin merata:
-   $$\text{DI} = \frac{\text{Waktu VM Maksimal} - \text{Waktu VM Minimal}}{\text{Rata-rata Waktu Eksekusi Seluruh VM}}$$
-
----
-
-## 4. BEDAH KODE OlbSimulation.java BARIS PER BARIS
-
-### Struktur Method pada File:
-- `main(...)`: Alur orkestrator simulasi.
-- `createHosts()`: Inisialisasi 4 server fisik (24.000 MIPS).
-- `createVms()`: Inisialisasi 10 mesin virtual (10.000 MIPS).
-- `createCloudlets(int count)`: Pembangkitan dataset task sintetis.
-- `applyOlbScheduling(...)`: Logika pemetaan task ke VM menggunakan formula OLB.
-- `calculateProjectMetrics(...)`: Ekstraksi metrik Makespan, Cost, Utilisasi, dan DI.
-
-### Bedah Detail Tiap Komponen:
-
-#### 1. Inisialisasi Host Fisik (`createHosts`)
-```java
-// 2 Host High Performance: 4 Core @ 2.000 MIPS (Total 8.000 MIPS/host)
-for (int i = 0; i < 2; i++) {
-    List<Pe> peList = new ArrayList<>();
-    for (int p = 0; p < 4; p++) peList.add(new PeSimple(2000));
-    list.add(new HostSimple(16384, 10000, 1000000, peList)); // RAM 16GB, BW 10Gbps, Storage 1TB
-}
-// 2 Host Standard: 4 Core @ 1.000 MIPS (Total 4.000 MIPS/host)
-for (int i = 0; i < 2; i++) {
-    List<Pe> peList = new ArrayList<>();
-    for (int p = 0; p < 4; p++) peList.add(new PeSimple(1000));
-    list.add(new HostSimple(8192, 10000, 1000000, peList));  // RAM 8GB, BW 1Gbps, Storage 1TB
-}
-```
-- Total MIPS Host Fisik: $(2 \times 4 \times 2000) + (2 \times 4 \times 1000) = 16.000 + 8.000 = \mathbf{24.000\text{ MIPS}}$.
-
-#### 2. Inisialisasi Virtual Machine (`createVms`)
-```java
-// 2 Large: 2 Core @ 1.000 MIPS, RAM 4GB, Tarif $0.12/detik
-for (int i = 0; i < 2; i++) {
-    Vm vm = new VmSimple(vmId++, 1000, 2).setRam(4096).setBw(1000).setSize(10000);
-    vm.setDescription("LARGE");
-    list.add(vm);
-}
-// 4 Medium: 1 Core @ 1.000 MIPS, RAM 2GB, Tarif $0.05/detik
-for (int i = 0; i < 4; i++) {
-    Vm vm = new VmSimple(vmId++, 1000, 1).setRam(2048).setBw(1000).setSize(10000);
-    vm.setDescription("MEDIUM");
-    list.add(vm);
-}
-// 4 Small: 1 Core @ 500 MIPS, RAM 1GB, Tarif $0.02/detik
-for (int i = 0; i < 4; i++) {
-    Vm vm = new VmSimple(vmId++, 500, 1).setRam(1024).setBw(1000).setSize(10000);
-    vm.setDescription("SMALL");
-    list.add(vm);
-}
-```
-- Total MIPS VM: $(2 \times 2 \times 1000) + (4 \times 1 \times 1000) + (4 \times 1 \times 500) = 4.000 + 4.000 + 2.000 = \mathbf{10.000\text{ MIPS}}$.
-- Total MIPS VM (10.000) lebih kecil dari kapasitas Host (24.000), sehingga seluruh VM dijamin berhasil dialokasikan (*placed*) ke dalam Datacenter.
-
-#### 3. Logika Penjadwalan OLB (`applyOlbScheduling`)
-```java
-private static void applyOlbScheduling(List<Vm> vmList, List<Cloudlet> cloudletList) {
-    Map<Vm, Double> readyTime = new HashMap<>();
-    for (Vm vm : vmList) readyTime.put(vm, 0.0);
-
-    for (Cloudlet task : cloudletList) {
-        // Cari VM yang memiliki nilai readyTime terkecil saat ini
-        Vm bestVm = vmList.stream()
-                .min(Comparator.comparingDouble(readyTime::get))
-                .orElseThrow();
-
-        // Tetapkan task ke VM tersebut
-        task.setVm(bestVm);
-
-        // Hitung durasi waktu pengerjaan task pada VM terpilih
-        double capacityMips = bestVm.getNumberOfPes() * bestVm.getMips();
-        double duration = task.getLength() / capacityMips;
-
-        // Akumulasikan readyTime VM tersebut
-        readyTime.put(bestVm, readyTime.get(bestVm) + duration);
-    }
-}
-```
-
----
-
-## 5. KODE LENGKAP OlbSimulation.java (SIAP PAKAI)
-
-Buat file baru bernama **`OlbSimulation.java`** di dalam folder `C:\cloudsim-workspace\src\main\java\` dan masukkan kode berikut:
-
-```java
-import org.cloudbus.cloudsim.brokers.DatacenterBroker;
-import org.cloudbus.cloudsim.brokers.DatacenterBrokerSimple;
-import org.cloudbus.cloudsim.cloudlets.Cloudlet;
-import org.cloudbus.cloudsim.cloudlets.CloudletSimple;
-import org.cloudbus.cloudsim.core.CloudSim;
-import org.cloudbus.cloudsim.datacenters.Datacenter;
-import org.cloudbus.cloudsim.datacenters.DatacenterSimple;
-import org.cloudbus.cloudsim.hosts.Host;
-import org.cloudbus.cloudsim.hosts.HostSimple;
-import org.cloudbus.cloudsim.resources.Pe;
-import org.cloudbus.cloudsim.resources.PeSimple;
-import org.cloudbus.cloudsim.utilizationmodels.UtilizationModelFull;
-import org.cloudbus.cloudsim.vms.Vm;
-import org.cloudbus.cloudsim.vms.VmSimple;
-import org.cloudsimplus.builders.tables.CloudletsTableBuilder;
-
-import java.util.*;
-
-public class OlbSimulation {
-    // Tarif sewa VM per detik sesuai Draft Desain
-    private static final double COST_LARGE = 0.12;
-    private static final double COST_MEDIUM = 0.05;
-    private static final double COST_SMALL = 0.02;
-
-    public static void main(String[] args) {
-        // 1. Inisialisasi Simulation Engine
-        CloudSim simulation = new CloudSim();
-
-        // 2. Inisialisasi Datacenter & 4 Host Heterogen (Total 24.000 MIPS)
-        List<Host> hostList = createHosts();
-        Datacenter datacenter = new DatacenterSimple(simulation, hostList);
-
-        // 3. Broker Penjadwal
-        DatacenterBroker broker = new DatacenterBrokerSimple(simulation);
-
-        // 4. Inisialisasi 10 VM Heterogen (Total 10.000 MIPS)
-        List<Vm> vmList = createVms();
-        broker.submitVmList(vmList);
-
-        // 5. Inisialisasi Cloudlet (Uji 100 Task Sintetis)
-        int jumlahTask = 100;
-        List<Cloudlet> cloudletList = createCloudlets(jumlahTask);
-
-        // 6. PENERAPAN ALGORITMA OLB
-        applyOlbScheduling(vmList, cloudletList);
-        broker.submitCloudletList(cloudletList);
-
-        // 7. Jalankan Simulasi
-        simulation.start();
-
-        // 8. Tampilkan Tabel Eksekusi & Hitung 4 Metrik Proposal
-        List<Cloudlet> finishedCloudlets = broker.getCloudletFinishedList();
-        new CloudletsTableBuilder(finishedCloudlets).build();
-        calculateProjectMetrics(vmList, finishedCloudlets);
-    }
-
-    private static List<Host> createHosts() {
-        List<Host> list = new ArrayList<>();
-        // 2 Host High Performance: 4 Core @ 2.000 MIPS, RAM 16 GB, BW 10 Gbps
-        for (int i = 0; i < 2; i++) {
-            List<Pe> peList = new ArrayList<>();
-            for (int p = 0; p < 4; p++) peList.add(new PeSimple(2000));
-            list.add(new HostSimple(16384, 10000, 1000000, peList));
-        }
-        // 2 Host Standard: 4 Core @ 1.000 MIPS, RAM 8 GB, BW 1 Gbps
-        for (int i = 0; i < 2; i++) {
-            List<Pe> peList = new ArrayList<>();
-            for (int p = 0; p < 4; p++) peList.add(new PeSimple(1000));
-            list.add(new HostSimple(8192, 10000, 1000000, peList));
-        }
-        return list;
-    }
-
-    private static List<Vm> createVms() {
-        List<Vm> list = new ArrayList<>();
-        int vmId = 0;
-        // 2 Large: 2 Core @ 1.000 MIPS, RAM 4 GB
-        for (int i = 0; i < 2; i++) {
-            Vm vm = new VmSimple(vmId++, 1000, 2).setRam(4096).setBw(1000).setSize(10000);
-            vm.setDescription("LARGE");
-            list.add(vm);
-        }
-        // 4 Medium: 1 Core @ 1.000 MIPS, RAM 2 GB
-        for (int i = 0; i < 4; i++) {
-            Vm vm = new VmSimple(vmId++, 1000, 1).setRam(2048).setBw(1000).setSize(10000);
-            vm.setDescription("MEDIUM");
-            list.add(vm);
-        }
-        // 4 Small: 1 Core @ 500 MIPS, RAM 1 GB
-        for (int i = 0; i < 4; i++) {
-            Vm vm = new VmSimple(vmId++, 500, 1).setRam(1024).setBw(1000).setSize(10000);
-            vm.setDescription("SMALL");
-            list.add(vm);
-        }
-        return list;
-    }
-
-    private static List<Cloudlet> createCloudlets(int count) {
-        List<Cloudlet> list = new ArrayList<>();
-        Random rand = new Random(42); // Seed 42 agar nilai acak konsisten/deterministik
-        for (int i = 0; i < count; i++) {
-            // Rentang panjang task sintetis: 1.000 - 100.000 MI
-            long length = 1000 + rand.nextInt(99000);
-            Cloudlet c = new CloudletSimple(length, 1);
-            c.setFileSize(300 + rand.nextInt(9700));
-            c.setOutputSize(300 + rand.nextInt(9700));
-            c.setUtilizationModel(new UtilizationModelFull());
-            list.add(c);
-        }
-        return list;
-    }
-
-    // Logika Pemetaan OLB: Pilih VM dengan readyTime terendah
-    private static void applyOlbScheduling(List<Vm> vmList, List<Cloudlet> cloudletList) {
-        Map<Vm, Double> readyTime = new HashMap<>();
-        for (Vm vm : vmList) readyTime.put(vm, 0.0);
-
-        for (Cloudlet task : cloudletList) {
-            // Evaluasi VM dengan readyTime minimum
-            Vm bestVm = vmList.stream()
-                    .min(Comparator.comparingDouble(readyTime::get))
-                    .orElseThrow();
-
-            task.setVm(bestVm);
-
-            // Perhitungan durasi eksekusi task di VM terpilih
-            double capacityMips = bestVm.getNumberOfPes() * bestVm.getMips();
-            double duration = task.getLength() / capacityMips;
-
-            // Perbarui readyTime VM terpilih
-            readyTime.put(bestVm, readyTime.get(bestVm) + duration);
-        }
-    }
-
-    private static void calculateProjectMetrics(List<Vm> vmList, List<Cloudlet> finishedCloudlets) {
-        Map<Vm, Double> vmExecutionTimes = new HashMap<>();
-        for (Vm vm : vmList) vmExecutionTimes.put(vm, 0.0);
-
-        double totalCost = 0.0;
-        for (Cloudlet c : finishedCloudlets) {
-            Vm vm = c.getVm();
-            double execTime = c.getActualCpuTime();
-            vmExecutionTimes.put(vm, vmExecutionTimes.get(vm) + execTime);
-
-            // Hitung tarif sewa berdasarkan tipe VM
-            double rate = vm.getDescription().equals("LARGE") ? COST_LARGE :
-                          vm.getDescription().equals("MEDIUM") ? COST_MEDIUM : COST_SMALL;
-            totalCost += (execTime * rate);
-        }
-
-        double makespan = Collections.max(vmExecutionTimes.values());
-        double minTime = Collections.min(vmExecutionTimes.values());
-        double totalBusyTime = vmExecutionTimes.values().stream().mapToDouble(Double::doubleValue).sum();
-        double avgTime = totalBusyTime / vmList.size();
-
-        double resourceUtilization = (totalBusyTime / (vmList.size() * makespan)) * 100.0;
-        double degreeOfImbalance = (makespan - minTime) / avgTime;
-
-        System.out.println("\n================ HASIL METRIK PROJEK KELOMPOK 8 ================");
-        System.out.printf("1. Makespan             : %.2f detik\n", makespan);
-        System.out.printf("2. Total Cost           : $%.2f\n", totalCost);
-        System.out.printf("3. Resource Utilization : %.2f %%\n", resourceUtilization);
-        System.out.printf("4. Degree of Imbalance  : %.4f\n", degreeOfImbalance);
-        System.out.println("=================================================================\n");
-    }
-}
-```
-
----
-
-## 6. PANDUAN TERMINAL MAVEN & VARIASI JUMLAH TASK
-
-Pastikan terminal PowerShell Anda berada di direktori proyek:
+### 2.4 Panduan Perintah Maven di Terminal
+Pastikan terminal berada pada root direktori:
 ```powershell
 cd C:\cloudsim-workspace
 ```
 
-### 1. Menjalankan Simulasi (Kompilasi Sekaligus Eksekusi):
+1. **Kompilasi dan Jalankan Simulasi**:
+   ```powershell
+   mvn compile exec:java "-Dexec.mainClass=OlbSimulation"
+   ```
+2. **Kapan Perlu `mvn clean`?**:
+   - `mvn clean` bertugas menghapus folder `target/` hasil kompilasi terdahulu.
+   - **Tidak perlu** menjalankan `mvn clean` setiap kali hanya mengubah parameter `jumlahTask` pada file `OlbSimulation.java`.
+   - Cukup jalankan `mvn compile exec:java "-Dexec.mainClass=OlbSimulation"`. Maven secara otomatis mendeteksi perubahan file `.java` dan melakukan kompilasi ulang inkremental.
+   - Perintah `mvn clean` hanya diperlukan jika terjadi error kompilasi yang aneh, corrupt cache bytecode, atau perubahan dependensi di `pom.xml`.
+
+---
+
+## 3. SPESIFIKASI INFRASTRUKTUR (HOST & VM)
+
+Sistem dimodelkan menggunakan arsitektur heterogen untuk mencerminkan kondisi riil infrastruktur komputasi awan bertingkat (multi-tier).
+
+### 3.1 Spesifikasi Server Fisik (Host)
+Terdapat 4 Host fisik yang dinaungi oleh Datacenter:
+
+| ID Host | Tipe / Grade Host | Core CPU (Pe) | Kapasitas per Core | Total MIPS Host | RAM | Bandwidth (BW) | Storage |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| Host 0 | High Performance | 4 Core | 2.000 MIPS | 8.000 MIPS | 16.384 MB (16 GB) | 10.000 Mbps | 1.000.000 MB |
+| Host 1 | High Performance | 4 Core | 2.000 MIPS | 8.000 MIPS | 16.384 MB (16 GB) | 10.000 Mbps | 1.000.000 MB |
+| Host 2 | Standard | 4 Core | 1.000 MIPS | 4.000 MIPS | 8.192 MB (8 GB) | 10.000 Mbps | 1.000.000 MB |
+| Host 3 | Standard | 4 Core | 1.000 MIPS | 4.000 MIPS | 8.192 MB (8 GB) | 10.000 Mbps | 1.000.000 MB |
+| **Total**| **4 Host** | **16 Core** | - | **24.000 MIPS** | **49.152 MB (48 GB)** | - | - |
+
+**Korelasi dengan Revisi Laporan (Spesifikasi Regional / Grade)**:
+Jika dosen menanyakan spesifikasi server Jakarta vs Surabaya:
+- **Datacenter High-Grade (contoh: Region Jakarta)**: Merepresentasikan Host 0 dan Host 1 dengan spesifikasi tinggi (4 Core @ 2.000 MIPS, RAM 16 GB) untuk tugas-tugas intensif.
+- **Datacenter Standard-Grade (contoh: Region Surabaya)**: Merepresentasikan Host 2 dan Host 3 dengan spesifikasi standar (4 Core @ 1.000 MIPS, RAM 8 GB) untuk efisiensi biaya.
+
+### 3.2 Spesifikasi Mesin Virtual (VM)
+Terdapat 10 unit VM heterogen yang disewa untuk melayani eksekusi tugas:
+
+| VM ID | Tipe / Grade | vCPU (Core) | MIPS per Core | Total MIPS VM | RAM | Bandwidth | Storage | Tarif Sewa per Detik |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| VM 0 | LARGE | 2 Core | 1.000 MIPS | 2.000 MIPS | 4.096 MB (4 GB) | 1.000 Mbps | 10.000 MB | $0.12 |
+| VM 1 | LARGE | 2 Core | 1.000 MIPS | 2.000 MIPS | 4.096 MB (4 GB) | 1.000 Mbps | 10.000 MB | $0.12 |
+| VM 2 | MEDIUM | 1 Core | 1.000 MIPS | 1.000 MIPS | 2.048 MB (2 GB) | 1.000 Mbps | 10.000 MB | $0.05 |
+| VM 3 | MEDIUM | 1 Core | 1.000 MIPS | 1.000 MIPS | 2.048 MB (2 GB) | 1.000 Mbps | 10.000 MB | $0.05 |
+| VM 4 | MEDIUM | 1 Core | 1.000 MIPS | 1.000 MIPS | 2.048 MB (2 GB) | 1.000 Mbps | 10.000 MB | $0.05 |
+| VM 5 | MEDIUM | 1 Core | 1.000 MIPS | 1.000 MIPS | 2.048 MB (2 GB) | 1.000 Mbps | 10.000 MB | $0.05 |
+| VM 6 | SMALL | 1 Core | 500 MIPS | 500 MIPS | 1.024 MB (1 GB) | 1.000 Mbps | 10.000 MB | $0.02 |
+| VM 7 | SMALL | 1 Core | 500 MIPS | 500 MIPS | 1.024 MB (1 GB) | 1.000 Mbps | 10.000 MB | $0.02 |
+| VM 8 | SMALL | 1 Core | 500 MIPS | 500 MIPS | 1.024 MB (1 GB) | 1.000 Mbps | 10.000 MB | $0.02 |
+| VM 9 | SMALL | 1 Core | 500 MIPS | 500 MIPS | 1.024 MB (1 GB) | 1.000 Mbps | 10.000 MB | $0.02 |
+| **Total**| **10 VM** | **12 Core** | - | **10.000 MIPS** | **20.480 MB (20 GB)**| - | - | - |
+
+---
+
+## 4. SISTEM ASSIGN VM KE HOST (GRADED VM ALLOCATION POLICY)
+
+Bagian ini menjawab secara tegas dan ilmiah pertanyaan dosen: **"Bagaimana sistem mengalokasikan 10 VM ke dalam 4 Host fisik sesuai spesifikasi terbaik?"**
+
+### 4.1 Mengapa Perlu Kebijakan Khusus (`GradedVmAllocationPolicy`)?
+Pada CloudSim standar, alokasi VM menggunakan `VmAllocationPolicySimple` yang bersifat *First-Fit* buta (hanya mengisi host dari indeks 0 tanpa peduli kecocokan grade).
+Untuk memberikan **arah yang jelas dan terdesain secara formal**, kita menerapkan kelas kebijakan mandiri: `GradedVmAllocationPolicy.java`.
+
+### 4.2 Aturan Kebijakan Alokasi Berbasis Grade
+Kebijakan ini mengklasifikasikan Host fisik berdasarkan performa per core:
+- **High Performance Host**: Kecepatan $\ge 1.500$ MIPS/core (Host 0 & Host 1 @ 2.000 MIPS/core).
+- **Standard Host**: Kecepatan $< 1.500$ MIPS/core (Host 2 & Host 3 @ 1.000 MIPS/core).
+
+Aturan pemetaan terarah:
+1. **VM LARGE (2 Core @ 1.000 MIPS)**:
+   - Ditempatkan ke **Host High Performance** (Host 0 & Host 1) karena membutuhkan densitas daya pemrosesan tinggi.
+2. **VM MEDIUM (1 Core @ 1.000 MIPS)**:
+   - Ditempatkan ke **Host High Performance** (Host 0 & Host 1) untuk memaksimalkan throughput eksekusi tugas-tugas mid-grade.
+3. **VM SMALL (1 Core @ 500 MIPS)**:
+   - Ditempatkan ke **Host Standard** (Host 2 & Host 3) untuk efisiensi alokasi sumber daya.
+4. **Fallback Mechanism**:
+   - Jika Host pada grade yang dituju sudah penuh, sistem secara otomatis mencari Host lain yang masih memiliki kapasitas yang cukup (`isSuitableForVm(vm)`).
+
+### 4.3 Matriks Penempatan Aktual (10 VM ke 4 Host)
+Berikut hasil penempatan aktual yang tereksekusi di dalam simulasi:
+
+| VM ID | Tipe VM | Kebutuhan vCPU / RAM | Host Terpilih | Tipe / Grade Host | Status Kapasitas Host Setelah Alokasi |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **VM 0** | LARGE | 2 Core, 4 GB | **Host 0** | High Performance | Sisa Host 0: 2 Core, 12 GB RAM |
+| **VM 1** | LARGE | 2 Core, 4 GB | **Host 0** | High Performance | Sisa Host 0: 0 Core, 8 GB RAM (Host 0 Penuh) |
+| **VM 2** | MEDIUM | 1 Core, 2 GB | **Host 1** | High Performance | Sisa Host 1: 3 Core, 14 GB RAM |
+| **VM 3** | MEDIUM | 1 Core, 2 GB | **Host 1** | High Performance | Sisa Host 1: 2 Core, 12 GB RAM |
+| **VM 4** | MEDIUM | 1 Core, 2 GB | **Host 1** | High Performance | Sisa Host 1: 1 Core, 10 GB RAM |
+| **VM 5** | MEDIUM | 1 Core, 2 GB | **Host 1** | High Performance | Sisa Host 1: 0 Core, 8 GB RAM (Host 1 Penuh) |
+| **VM 6** | SMALL | 1 Core, 1 GB | **Host 2** | Standard | Sisa Host 2: 3 Core, 7 GB RAM |
+| **VM 7** | SMALL | 1 Core, 1 GB | **Host 2** | Standard | Sisa Host 2: 2 Core, 6 GB RAM |
+| **VM 8** | SMALL | 1 Core, 1 GB | **Host 2** | Standard | Sisa Host 2: 1 Core, 5 GB RAM |
+| **VM 9** | SMALL | 1 Core, 1 GB | **Host 2** | Standard | Sisa Host 2: 0 Core, 4 GB RAM (Host 2 Penuh) |
+| - | - | - | **Host 3** | Standard | **Idle / Standby Node** (0 VM terpasang) |
+
+### 4.4 Peran Host 3 (Standby Node)
+Host 3 berstatus kosong (0 VM). Dalam arsitektur cloud computing industri (*enterprise cloud infrastructure*), menyisakan 1 Host sebagai *hot-standby / failover node* adalah praktik standar untuk:
+- Memastikan ketersediaan tinggi (*High Availability*) jika salah satu Host fisik mengalami kegagalan (*hardware failure*).
+- Menyediakan ruang cadangan untuk migrasi mesin virtual (*VM Migration*) saat terjadi lonjakan beban komputasi tak terduga.
+
+---
+
+## 5. DATASET BEBAN KERJA (GOOGLE CLOUD JOBS - GoCJ)
+
+### 5.1 Karakteristik File Dataset
+Dataset yang digunakan adalah `GoCJ_Dataset_1000.csv` pada folder:
+`src/main/resources/dataset/GoCJ_Dataset_1000.csv`
+
+Dataset ini merupakan trace beban kerja komputasi terstandarisasi yang diturunkan dari aktivitas komputasi nyata di Google Cloud. Berkas terdiri dari 1.000 baris data tanpa baris header.
+
+### 5.2 Struktur Kolom CSV & Penjelasannya
+Setiap baris CSV memiliki 3 kolom:
+```text
+<Kolom 1>,<Kolom 2>,<Kolom 3>
+```
+Contoh 5 baris pertama:
+```text
+83000,1,1
+95000,2,2
+91000,3,3
+81000,2,3
+27500,1,4
+```
+
+1. **Kolom 1 - Task Length (MI - Million Instructions)**:
+   - Menunjukkan beban komputasi total instruksi yang harus diselesaikan oleh vCPU.
+   - Diambil oleh kode program menggunakan: `Long.parseLong(parts[0])` sebagai parameter panjang `Cloudlet`.
+2. **Kolom 2 - Job Category / Grade (1, 2, atau 3)**:
+   - Menunjukkan tingkatan beban komputasi tugas:
+     - **Grade 1 (Low Grade / Ringan)**: Tugas berdurasi cepat (< 80.000 MI).
+     - **Grade 2 (Mid Grade / Menengah)**: Tugas komputasi reguler (80.000 - 200.000 MI).
+     - **Grade 3 (High Grade / Berat)**: Tugas komputasi berat (*compute-intensive*) (> 200.000 MI, hingga 712.500 MI).
+3. **Kolom 3 - Job ID**:
+   - Menunjukkan identitas pekerjaan induk (*job lineage*) asal tugas tersebut di lingkungan Google Cloud.
+
+### 5.3 Klasifikasi Ukuran Dataset Pengujian
+Pengujian dilakukan berdasarkan tiga tingkatan volume data:
+- **Small Dataset**: 100 Task
+- **Medium Dataset**: 200 s/d 500 Task
+- **Large Dataset**: 1.000 Task (keseluruhan dataset)
+
+### 5.4 Metode Pembacaan Dataset di Program
+Data dibaca secara **sekuensial (berurutan dari baris 1)** hingga mencapai batas `count` yang ditentukan pada variabel `jumlahTask`. Data **tidak diacak (non-random)** demi menjamin reprodusibilitas hasil simulasi.
+
+---
+
+## 6. ALGORITMA PENJADWALAN OPPORTUNISTIC LOAD BALANCING (OLB)
+
+### 6.1 Prinsip Dasar OLB
+Opportunistic Load Balancing (OLB) adalah algoritma penjadwalan beban kerja dengan prinsip:
+> *"Tugaskan setiap tugas yang datang ke Mesin Virtual yang memiliki waktu ketersediaan (ready time) paling awal, tanpa mempertimbangkan ukuran panjang tugas maupun kapasitas kecepatan mesin virtual."*
+
+### 6.2 Alur Kerja Logika OLB
+1. Inisialisasi waktu siap untuk setiap VM: `readyTime(vm) = 0.0`.
+2. Untuk setiap tugas `task` dalam antrean:
+   a. Pilih VM dengan nilai `readyTime` minimum: `bestVm = argmin(readyTime(vm))`.
+   b. Pasangkan tugas ke VM terpilih: `task.setVm(bestVm)`.
+   c. Hitung durasi estimasi: `duration = task.getLength() / (bestVm.getNumberOfPes() * bestVm.getMips())`.
+   d. Perbarui waktu siap VM: `readyTime(bestVm) += duration`.
+3. Serahkan daftar tugas ke broker untuk dieksekusi mesin simulasi.
+
+### 6.3 Analisis Karakteristik OLB
+- **Keunggulan**: Kompleksitas komputasi sangat ringan O(n * m), utilisasi kuantitas tugas antar VM sangat rata.
+- **Kelemahan pada Lingkungan Heterogen**: OLB bersifat acuh terhadap ukuran tugas (*size-blind*). Tugas Kategori 3 berukuran 712.500 MI dapat terlempar ke VM Small (500 MIPS) hanya karena VM tersebut sedang kosong 0 detik. Tugas tersebut butuh waktu 1.425 detik di VM Small (padahal di VM Large hanya 356 detik). Fenomena ini menjadi penyebab utama tingginya Makespan dan Degree of Imbalance.
+
+---
+
+## 7. RUMUS & INTERPRETASI 4 METRIK EVALUASI
+
+### 7.1 Makespan
+- **Definisi**: Total waktu yang dibutuhkan sistem hingga seluruh tugas selesai dieksekusi.
+- **Formula**:
+  $$\text{Makespan} = \max_{j \in \text{vmList}} (\text{ExecutionTime}_j)$$
+- **Satuan**: Detik.
+
+### 7.2 Total Cost (Biaya Total)
+- **Definisi**: Total biaya finansial sewa mesin virtual selama waktu proses aktif CPU tugas berlangsung.
+- **Formula**:
+  $$\text{Total Cost} = \sum_{i=1}^{n} (\text{ActualCpuTime}_i \times \text{Tarif}(\text{Vm}_i))$$
+- **Tarif Per Detik**: Large = $0.12, Medium = $0.05, Small = $0.02.
+- **Satuan**: Dolar AS ($).
+
+### 7.3 Resource Utilization (Tingkat Utilisasi Sumber Daya)
+- **Definisi**: Persentase rasio antara total waktu kerja produktif seluruh VM terhadap total kapasitas waktu sepanjang Makespan.
+- **Formula**:
+  $$\text{Resource Utilization} = \left( \frac{\sum_{j=1}^{m} \text{ExecutionTime}_j}{m \times \text{Makespan}} \right) \times 100\%$$
+- **Satuan**: Persen (%).
+
+### 7.4 Degree of Imbalance (DI - Derajat Ketidakseimbangan)
+- **Definisi**: Tingkat ketimpangan pembagian durasi eksekusi antar mesin virtual.
+- **Formula**:
+  $$\text{Degree of Imbalance} = \frac{\max(\text{ExecutionTime}) - \min(\text{ExecutionTime})}{\text{Average}(\text{ExecutionTime})}$$
+- **Satuan**: Nilai rasio numerik.
+
+---
+
+## 8. PANDUAN EKSEKUSI & TEST CASES
+
+### 8.1 Cara Mengubah Parameter Jumlah Task
+Buka file `src/main/java/OlbSimulation.java` pada baris:
+```java
+int jumlahTask = 100; // Ubah menjadi 200, 500, atau 1000
+```
+Simpan file, lalu jalankan di terminal:
 ```powershell
 mvn compile exec:java "-Dexec.mainClass=OlbSimulation"
 ```
 
-### 2. Cara Mengubah Jumlah Task (100, 200, atau 500 Task):
-Buka file `OlbSimulation.java`, lalu cari baris pada method `main`:
-```java
-int jumlahTask = 100; // Ubah nilai ini menjadi 200 atau 500
-```
-Setelah mengubah dan menyimpan file (`Ctrl + S`), jalankan kembali perintah `mvn compile exec:java "-Dexec.mainClass=OlbSimulation"`.
+### 8.2 Daftar Test Case Evaluasi
+| Test Case | Jumlah Task | Kategori Dataset | Tujuan Analisis |
+| :--- | :--- | :--- | :--- |
+| TC-01 | 100 Task | Small | Baseline pengujian awal dan verifikasi alokasi 10 VM |
+| TC-02 | 200 Task | Medium | Pengamatan perilaku awal saat antrean tugas bertambah |
+| TC-03 | 500 Task | Medium | Evaluasi stabilitas sistem pada beban kerja menengah |
+| TC-04 | 1000 Task | Large | Evaluasi kapasitas maksimum dari seluruh baris dataset GoCJ |
 
 ---
 
-## 7. PANDUAN EKSEKUSI 6 PERMINTAAN DOSEN SAAT DEMO
+## 9. TANYA JAWAB KRITIS SAAT DEMO (FAQ)
 
-Ikuti urutan langkah berikut secara runtut saat pelaksanaan presentasi/demo di hadapan dosen:
+### Q1: Bagaimana mekanisme 10 VM dialokasikan ke 4 Host fisik?
+**Jawaban**:
+Sistem menggunakan kebijakan alokasi terarah `GradedVmAllocationPolicy`:
+- VM LARGE (2 Core) dan VM MEDIUM (1 Core) dialokasikan ke Host High Performance (Host 0 dan Host 1 @ 2.000 MIPS/core). Host 0 menampung 2 VM LARGE, Host 1 menampung 4 VM MEDIUM.
+- VM SMALL (1 Core @ 500 MIPS) dialokasikan ke Host Standard (Host 2 @ 1.000 MIPS/core) menampung 4 VM SMALL.
+- Host 3 dipertahankan sebagai node cadangan (*standby/redundancy node*).
+- Setiap kali simulasi dijalankan, tabel pemetaan ini dicetak langsung di konsol terminal.
 
-### 1. Penjelasan Algoritma Menggunakan Slide
-- **Slide Karakteristik:** Jelaskan bahwa OLB (*Opportunistic Load Balancing*) adalah algoritma penjadwalan berorientasi beban (*load-oriented*) yang bekerja secara *greedy* dengan kompleksitas waktu $\mathcal{O}(n \cdot m)$.
-- **Slide Cara Kerja:** Jelaskan bahwa setiap task dialokasikan murni berdasarkan nilai `readyTime` minimum (mesin yang tercepat menganggur), tanpa mempertimbangkan ukuran task maupun biaya sewa mesin.
-- **Slide Trade-off / Multi-objective:** Jelaskan bahwa OLB unggul dalam menjaga utilisasi mesin agar tidak ada yang idle, namun memiliki kelemahan berupa potensi Makespan panjang dan biaya sewa (*Total Cost*) yang tinggi karena alokasi yang tidak sensitif terhadap heterogenitas MIPS dan tarif.
+### Q2: Mengapa alokasi VM sempat mengalami error "No suitable host found"?
+**Jawaban**:
+Error tersebut disebabkan oleh konfigurasi awal Bandwidth Host (1.000 Mbps) yang sama dengan permintaan Bandwidth satu VM (1.000 Mbps), sehingga satu Host langsung jenuh setelah menerima 1 VM. Masalah terselesaikan secara tuntas setelah Bandwidth Host dinaikkan menjadi 10.000 Mbps (10 Gbps).
 
-### 2. Jalankan Simulasi di Hadapan Dosen
-- Buka terminal di Antigravity IDE, jalankan:
-  ```powershell
-  mvn compile exec:java "-Dexec.mainClass=OlbSimulation"
-  ```
-- Sorot output tabel CloudSim Plus yang mencantumkan status `SUCCESS` seluruh Cloudlet beserta durasi eksekusinya.
-- Tunjukkan ringkasan 4 metrik di bagian bawah konsol.
-
-### 3. Tunjukkan Implementasi Algoritma di Kode
-Buka file `OlbSimulation.java` dan sorot method `applyOlbScheduling`:
-```java
-Vm bestVm = vmList.stream()
-        .min(Comparator.comparingDouble(readyTime::get))
-        .orElseThrow();
-```
-Jelaskan ke dosen:
-> *"Baris ini mengimplementasikan formula $j^* = \arg\min_j(\text{readyTime}_j)$, di mana sistem memilih VM yang saat itu memiliki akumulasi waktu penyelesaian paling kecil."*
-
-### 4. Tunjukkan Kesesuaian Spesifikasi dengan Proposal
-Sandingkan tabel proposal Anda dengan kode Java:
-- **Datacenter & Host (`createHosts()`):** Tepat 4 Host fisik (2 Host High Performance 4 Core @ 2.000 MIPS + 2 Host Standard 4 Core @ 1.000 MIPS = 24.000 MIPS).
-- **Virtual Machines (`createVms()`):** Tepat 10 VM (2 Large @ 2 Core 1.000 MIPS, 4 Medium @ 1 Core 1.000 MIPS, 4 Small @ 1 Core 500 MIPS = 10.000 MIPS).
-- **Dataset Workload (`createCloudlets()`):** Rentang instruksi 1.000 hingga 100.000 MI dengan file I/O 300 KB–10 MB.
-- **Metrik Evaluasi (`calculateProjectMetrics()`):** Menghitung tepat 4 metrik: Makespan, Total Cost, Resource Utilization, dan Degree of Imbalance.
-
-### 5 & 6. Prosedur Perekaman & Pengumpulan Video
-1. **Perekaman:** Pastikan aplikasi Zoom/OBS merekam tampilan layar penuh (slide + terminal IDE) beserta audio penjelasan Anda.
-2. **Unggah YouTube:** Masuk ke YouTube Studio $\to$ Pilih **Upload Video** $\to$ Ubah opsi visibilitas menjadi **Unlisted** (tidak publik, hanya yang memegang link yang bisa menonton).
-3. **Pengumpulan:** Salin tautan URL video Unlisted tersebut dan masukkan ke lembar pengumpulan yang ditentukan dosen.
+### Q3: Mengapa nilai Degree of Imbalance (DI) relatif tinggi (> 1.8)?
+**Jawaban**:
+Tingginya nilai DI adalah karakteristik inheren algoritma OLB pada lingkungan heterogen, karena OLB menugaskan tugas hanya berdasarkan ketersediaan waktu (`readyTime`) tanpa mempertimbangkan apakah tugas tersebut Kategori 3 (berat) dan tanpa memeriksa apakah VM tujuan berkategori Small (lambat).

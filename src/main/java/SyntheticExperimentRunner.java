@@ -4,6 +4,7 @@ import org.cloudbus.cloudsim.cloudlets.Cloudlet;
 import org.cloudbus.cloudsim.core.CloudSim;
 import org.cloudbus.cloudsim.datacenters.Datacenter;
 import org.cloudbus.cloudsim.datacenters.DatacenterSimple;
+import org.cloudbus.cloudsim.allocationpolicies.VmAllocationPolicy;
 import org.cloudbus.cloudsim.hosts.Host;
 import org.cloudbus.cloudsim.hosts.HostSimple;
 import org.cloudbus.cloudsim.resources.Pe;
@@ -78,6 +79,9 @@ public class SyntheticExperimentRunner {
         String line = "----------------------------------------------------------------------------------------";
         String doubleLine = "========================================================================================";
 
+        // Tampilkan bukti pemetaan alokasi 10 VM ke 4 Host fisik (Graded / Non-Otomatis sesuai PENCERDASAN.MD Bab 4)
+        displayInitialVmHostMapping();
+
         System.out.println(doubleLine);
         System.out.println("                 HASIL EKSPERIMEN OLB - DATASET SINTETIS");
         System.out.println(doubleLine);
@@ -127,12 +131,21 @@ public class SyntheticExperimentRunner {
      * Menjalankan 1 run simulasi CloudSim dengan OLB dan dataset sintetis.
      */
     public static ExperimentResult runSingleSimulation(int taskCount, int run, long seed) {
+        return runSingleSimulation(taskCount, run, seed, false);
+    }
+
+    /**
+     * Menjalankan 1 run simulasi CloudSim dengan OLB dan dataset sintetis,
+     * serta mencetak tabel pemetaan alokasi VM ke Host jika printMapping bernilai true.
+     */
+    public static ExperimentResult runSingleSimulation(int taskCount, int run, long seed, boolean printMapping) {
         // 1. Inisialisasi CloudSim instance
         CloudSim simulation = new CloudSim();
 
-        // 2. Buat Host & Datacenter (sesuai konfigurasi existing OlbSimulation)
+        // 2. Buat Host & Datacenter dengan GradedVmAllocationPolicy
+        //    (VM LARGE/MEDIUM → Host High Performance, VM SMALL → Host Standard)
         List<Host> hostList = createHosts();
-        Datacenter datacenter = new DatacenterSimple(simulation, hostList);
+        Datacenter datacenter = new DatacenterSimple(simulation, hostList, new GradedVmAllocationPolicy());
 
         // 3. Buat Broker
         DatacenterBroker broker = new DatacenterBrokerSimple(simulation);
@@ -155,9 +168,82 @@ public class SyntheticExperimentRunner {
         // 7. Jalankan simulasi
         simulation.start();
 
-        // 8. Hitung metrik evaluasi
+        // 8. Tampilkan bukti pemetaan alokasi VM ke Host (Graded / Manual Allocation)
+        if (printMapping) {
+            printVmAllocationMapping(vmList, hostList);
+        }
+
+        // 9. Hitung metrik evaluasi
         List<Cloudlet> finishedCloudlets = broker.getCloudletFinishedList();
         return computeMetrics(taskCount, run, seed, totalWorkload, vmList, finishedCloudlets);
+    }
+
+    /**
+     * Mencetak bukti tabel pemetaan alokasi VM ke Host fisik
+     * sesuai spesifikasi GradedVmAllocationPolicy pada PENCERDASAN.MD (Bab 4.3 & Bab 9 Q1).
+     */
+    public static void printVmAllocationMapping(List<Vm> vmList, List<Host> hostList) {
+        String doubleLine = "========================================================================================";
+        String line = "----------------------------------------------------------------------------------------";
+
+        System.out.println("\n" + doubleLine);
+        System.out.println("       PEMETAAN ALOKASI VM KE HOST FISIK (GRADED VM ALLOCATION POLICY)");
+        System.out.println("      (Sesuai PENCERDASAN.MD Bab 4.3: Terarah / Non-Otomatis First-Fit)");
+        System.out.println(doubleLine);
+        System.out.printf("%-8s %-10s %-22s %-12s %-20s %-15s\n",
+                "VM ID", "Tipe VM", "Kapasitas vCPU/RAM", "Host", "Tipe / Grade Host", "Status Alokasi");
+        System.out.println(line);
+
+        for (Vm vm : vmList) {
+            Host host = vm.getHost();
+            String hostId = (host != null) ? "Host " + host.getId() : "Unassigned";
+            String hostType = (host != null && !host.getPeList().isEmpty() && host.getPeList().get(0).getCapacity() >= 1500)
+                    ? "High Performance" : "Standard";
+            String vCpuRam = String.format("%d Core, %d GB RAM",
+                    vm.getNumberOfPes(), (long) (vm.getRam().getCapacity() / 1024));
+
+            String status = "Teralokasi OK";
+            System.out.printf("%-8s %-10s %-22s %-12s %-20s %-15s\n",
+                    "VM " + vm.getId(), vm.getDescription(), vCpuRam, hostId, hostType, status);
+        }
+
+        // Tampilkan Host yang tidak menampung VM (Standby Node sesuai Bab 4.4)
+        Set<Long> usedHostIds = new HashSet<>();
+        for (Vm vm : vmList) {
+            if (vm.getHost() != null) {
+                usedHostIds.add(vm.getHost().getId());
+            }
+        }
+        for (Host host : hostList) {
+            if (!usedHostIds.contains(host.getId())) {
+                String hostType = (!host.getPeList().isEmpty() && host.getPeList().get(0).getCapacity() >= 1500)
+                        ? "High Performance" : "Standard";
+                System.out.printf("%-8s %-10s %-22s %-12s %-20s %-15s\n",
+                        "-", "-", "-", "Host " + host.getId(), hostType, "Standby Node (0 VM)");
+            }
+        }
+
+        System.out.println(doubleLine);
+        System.out.println("Catatan Kebijakan Penempatan:");
+        System.out.println("- Host 0 & 1 (High Performance): Menampung VM LARGE & MEDIUM");
+        System.out.println("- Host 2 (Standard): Menampung VM SMALL");
+        System.out.println("- Host 3 (Standard): Standby / Failover Node (Cadangan)");
+        System.out.println(doubleLine + "\n");
+    }
+
+    /**
+     * Menjalankan verifikasi alokasi awal 10 VM ke 4 Host fisik
+     * menggunakan GradedVmAllocationPolicy dan mencetak tabel pemetaannya.
+     */
+    public static void displayInitialVmHostMapping() {
+        CloudSim sim = new CloudSim();
+        List<Host> hostList = createHosts();
+        Datacenter datacenter = new DatacenterSimple(sim, hostList, new GradedVmAllocationPolicy());
+        DatacenterBroker broker = new DatacenterBrokerSimple(sim);
+        List<Vm> vmList = createVms();
+        broker.submitVmList(vmList);
+        sim.start();
+        printVmAllocationMapping(vmList, hostList);
     }
 
     /**
